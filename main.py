@@ -1,6 +1,7 @@
 import flet as ft
 import flet_audio as ft_audio
 import sqlite3
+import sys
 import os
 import tempfile
 import base64
@@ -13,6 +14,29 @@ CARD_COLOR = "#181818"
 MY_ACCENT = "#8bb7f0"
 TEXT_SUB = "#B3B3B3"
 DB_PATH = "music_app.db"
+
+
+def get_db_path():
+    # Если запущено как EXE
+    if getattr(sys, 'frozen', False):
+        # Папка, где лежит .exe
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # Папка, где лежит .py (при разработке)
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    return os.path.join(base_dir, "music_app.db")
+
+DB_PATH = get_db_path()
+
+def resource_path(relative_path):
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+ICON_PATH = resource_path("icon2.ico")
 
 
 def image_to_base64(data: bytes):
@@ -81,6 +105,8 @@ class SoundFlowApp:
         self.audio = None
         self.track_controls = {}
         self.all_tracks = []
+        self.is_shuffle = False
+        self.shuffled_list = []
         self.current_track_id = None
         self.equalizer_b64 = None
         self.load_assets()
@@ -286,6 +312,12 @@ class SoundFlowApp:
             ])
         )
 
+        self.shuffle_btn = ft.IconButton(
+            ft.Icons.SHUFFLE,
+            icon_color=TEXT_SUB,
+            on_click=self.toggle_shuffle,
+            tooltip="Перемешать"
+        )
         player_bar = ft.Container(
             height=170, bgcolor="#181818", border_radius=20, margin=15, padding=20,
             content=ft.Column([
@@ -301,6 +333,7 @@ class SoundFlowApp:
                     ], width=350),
                     # Центр: кнопки управления
                     ft.Row([
+                        self.shuffle_btn,
                         ft.IconButton(ft.Icons.SKIP_PREVIOUS, on_click=lambda _: self.play_next(-1)),
                         self.play_btn,
                         ft.IconButton(ft.Icons.SKIP_NEXT, on_click=lambda _: self.play_next(1))
@@ -623,13 +656,47 @@ class SoundFlowApp:
             self.play_btn.icon = ft.Icons.PLAY_CIRCLE_FILLED
         self.page.update()
 
+    def toggle_shuffle(self, e):
+        self.is_shuffle = not self.is_shuffle
+        self.shuffle_btn.icon_color = MY_ACCENT if self.is_shuffle else TEXT_SUB
+
+        if self.is_shuffle:
+            # Создаем перемешанный список ID
+            self.shuffled_list = [t[0] for t in self.all_tracks]
+            import random
+            random.shuffle(self.shuffled_list)
+            # Если сейчас что-то играет, передвинем это в начало списка, чтобы не повторялось сразу
+            if self.current_track_id in self.shuffled_list:
+                self.shuffled_list.remove(self.current_track_id)
+                self.shuffled_list.insert(0, self.current_track_id)
+
+        self.page.update()
+
     def play_next(self, step):
-        if not hasattr(self, 'all_tracks'): return
+        if not hasattr(self, 'all_tracks') or not self.all_tracks: return
+
         ids = [t[0] for t in self.all_tracks]
-        if self.current_track_id in ids:
-            idx = (ids.index(self.current_track_id) + step) % len(ids)
-            t = self.all_tracks[idx]
-            self.play_audio(t[0], t[1], t[2])
+
+        if self.is_shuffle and self.shuffled_list:
+            # Логика перемешанного списка
+            try:
+                curr_idx = self.shuffled_list.index(self.current_track_id)
+                next_idx = (curr_idx + step) % len(self.shuffled_list)
+                target_id = self.shuffled_list[next_idx]
+            except ValueError:
+                target_id = self.shuffled_list[0]
+        else:
+            # Обычная логика по порядку
+            if self.current_track_id in ids:
+                idx = (ids.index(self.current_track_id) + step) % len(ids)
+                target_id = ids[idx]
+            else:
+                target_id = ids[0]
+
+        # Находим данные трека для запуска
+        track_data = next((t for t in self.all_tracks if t[0] == target_id), None)
+        if track_data:
+            self.play_audio(track_data[0], track_data[1], track_data[2])
 
     def change_volume(self, e):
         if self.audio:
@@ -699,6 +766,7 @@ class SoundFlowApp:
 
 def main(page: ft.Page):
     page.title = "SoundFlow"
+
     page.window.width = 1200
     page.window.height = 900
 
